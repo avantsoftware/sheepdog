@@ -44,11 +44,39 @@ ts=""
 used=""
 [ -f "$STAMP" ] && read -r ts used <"$STAMP"
 now=$(date +%s)
+mins=$((WINDOW / 60))
 
-if [ -n "$ts" ] && [ "$((now - ts))" -lt "$WINDOW" ]; then
-  [ "$used" = "$required" ] && exit 0
-  case "$overrides" in *" $used "*) exit 0 ;; esac
+# Would the stamped skill satisfy this gate, ignoring freshness?
+satisfies=0
+if [ -n "$used" ]; then
+  if [ "$used" = "$required" ]; then
+    satisfies=1
+  else
+    case "$overrides" in *" $used "*) satisfies=1 ;; esac
+  fi
 fi
 
-echo "Blocked: $FILE requires the '$required' skill. Invoke it via the Skill tool (last skill: '${used:-none}'), then redo this edit. (Gate: skill-first plugin; rules in .claude/skill-first/gate-map.conf; valid ${WINDOW}s after the matching skill.)" >&2
+# Fresh AND satisfying -> allow the edit.
+if [ "$satisfies" -eq 1 ] && [ -n "$ts" ] && [ "$((now - ts))" -lt "$WINDOW" ]; then
+  exit 0
+fi
+
+# Blocked: report the precise reason and the exact next action.
+if [ -z "$used" ]; then
+  why="No skill has been invoked yet, so no edit to this path is authorized."
+elif [ "$satisfies" -eq 1 ]; then
+  why="You invoked '$used' earlier, but that was over ${mins} min ago and the authorization has expired."
+else
+  why="The last skill you invoked ('$used') does not authorize edits to this path."
+fi
+
+{
+  printf '\n'
+  printf '  ✗  skill-first blocked this edit\n\n'
+  printf '     File       %s\n' "$FILE"
+  printf '     Why        %s\n' "$why"
+  printf '     Required   the "%s" skill\n\n' "$required"
+  printf '  →  Do this now: invoke the Skill tool with skill "%s", then re-apply this exact edit.\n' "$required"
+  printf '     This path is governed by .claude/skill-first/gate-map.conf; the skill stays valid for %s min after you invoke it.\n' "$mins"
+} >&2
 exit 2
