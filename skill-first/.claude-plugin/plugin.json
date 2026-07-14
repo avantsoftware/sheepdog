@@ -1,0 +1,7 @@
+{
+  "name": "skill-first",
+  "description": "Generic skill-first gate for any project. Injects a per-project task->skill routing table on every prompt and blocks edits to governed files unless the matching skill was invoked first. Project rules live in .claude/skill-first/ (scaffold them with /skill-first:setup); the plugin ships no project-specific rules.",
+  "author": {
+    "name": "Albert Alef"
+  }
+}

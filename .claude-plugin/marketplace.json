@@ -1,0 +1,14 @@
+{
+  "name": "avantsoft",
+  "owner": {
+    "name": "Albert Alef"
+  },
+  "description": "Claude Code plugins.",
+  "plugins": [
+    {
+      "name": "skill-first",
+      "source": "./skill-first",
+      "description": "Generic skill-first gate: injects a per-project task->skill routing table on every prompt and blocks edits to governed files unless the matching skill was invoked first. Project rules live in .claude/skill-first/, scaffolded with /skill-first:setup."
+    }
+  ]
+}
