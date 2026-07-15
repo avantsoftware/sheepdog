@@ -1,36 +1,26 @@
 # skill-first
 
-A generic **skill-first gate** for [Claude Code](https://code.claude.com), packaged as
-a plugin. It nudges — and when needed, forces — Claude to invoke the *right* skill
-before editing files that have strong conventions, so hand-edits that skip a project's
-workflow get blocked instead of merged.
+> Require the *right* skill to be invoked before Claude Code edits governed files —
+> a reminder on every prompt, and a hard gate when the reminder isn't enough.
 
-The plugin is **project-agnostic**: it ships zero rules of its own. Each project
-declares what is governed and by which skill in `.claude/skill-first/config.json`. On
-a project that hasn't opted in, the plugin is a silent no-op.
+Skills are how a team teaches Claude its conventions: how an endpoint is created,
+what an operation looks like, how a serializer is structured. But skills are
+advisory — nothing stops the model from editing `app/operations/` by hand, and deep
+into a long session it will. Guidance in context decays; an agent in a hurry takes
+the direct path; the hand-edit that skips your workflow gets merged.
 
-## How it works
+**skill-first turns "use the skill" from a suggestion into a precondition.** Editing
+a governed file without first invoking its matching skill is rejected at the tool
+level, with an error that tells Claude exactly how to recover.
 
-Three bash hooks, all reading project-owned config from
-`$CLAUDE_PROJECT_DIR/.claude/skill-first/`:
+The plugin is **project-agnostic** and ships zero rules of its own. Each project
+declares what is governed and by which skill in `.claude/skill-first/config.json`.
+On a project that hasn't opted in, the plugin is a silent no-op.
 
-| Hook | Event | What it does |
-| --- | --- | --- |
-| `skill-reminder.sh` | `UserPromptSubmit` | Injects a reminder + the path→skill routing table (generated from `rules`) into context on every prompt. |
-| `stamp-skill.sh` | `PostToolUse(Skill)` | Records `<timestamp> <skill>` in `.skill-used` whenever a skill is invoked. |
-| `require-skill.sh` | `PreToolUse(Edit\|Write\|MultiEdit)` | Looks up the edited file in `rules`; blocks the edit unless the matching skill was stamped within the window. |
+## Quickstart
 
-No config → nothing is injected, nothing is blocked.
-
-**Requires `jq`.** macOS 15+ ships it at `/usr/bin/jq`; on Linux it's a standard
-package. The hooks also look for it in common install locations (nix profiles,
-homebrew, `~/.local/bin`) in case Claude Code runs with a minimal PATH. If jq can't
-be found at all, a **governed** project **fails closed**: every edit is blocked with
-a message saying what to install — the gate never silently turns itself off. The
-same loud-over-silent policy applies to a config that doesn't parse or contains an
-unknown/misspelled key. Ungoverned projects are unaffected either way.
-
-## Install
+Prerequisite: `jq` (preinstalled on macOS 15+; `brew install jq` / `apt install jq`
+elsewhere).
 
 ```
 /plugin marketplace add avantsoftware/skill-first
@@ -38,26 +28,43 @@ unknown/misspelled key. Ungoverned projects are unaffected either way.
 /reload-plugins
 ```
 
-(For local development: `claude --plugin-dir ./skill-first`.)
-
-## Set up a project
-
-Run the bundled skill in the project you want to gate:
+Then, inside the project you want to gate:
 
 ```
 /skill-first:setup
 ```
 
-It scaffolds:
+It discovers the project's skills, scaffolds **`.claude/skill-first/config.json`**
+(commit it — these are shared team rules) and adds a `.gitignore` entry for
+**`.claude/skill-first/.skill-used`** (runtime state — never commit it).
 
-- **`.claude/skill-first/config.json`** — the whole gate: window, overrides, rules
-  (commit this).
-- a `.gitignore` entry for **`.claude/skill-first/.skill-used`** (runtime state — do
-  not commit).
+## How it works
+
+Three bash hooks, all reading project-owned config from
+`$CLAUDE_PROJECT_DIR/.claude/skill-first/`:
+
+| Hook | Event | Role |
+| --- | --- | --- |
+| `skill-reminder.sh` | `UserPromptSubmit` | **Nudge** — injects a reminder + the path→skill routing table (generated from `rules`) on every prompt. |
+| `stamp-skill.sh` | `PostToolUse(Skill)` | **Witness** — records `<timestamp> <skill>` in `.skill-used` whenever a skill is invoked. |
+| `require-skill.sh` | `PreToolUse(Edit\|Write\|MultiEdit)` | **Gate** — matches the edited file against `rules`; blocks unless the matching skill was stamped within the window. |
+
+```mermaid
+sequenceDiagram
+    participant Claude
+    participant Gate as skill-first
+    Note over Claude,Gate: on every user prompt
+    Gate-->>Claude: inject routing table (UserPromptSubmit)
+    Claude->>Gate: Edit app/operations/x.rb
+    Gate-->>Claude: ✗ blocked — invoke "edit-or-create-action-operation" first
+    Claude->>Gate: Skill("edit-or-create-action-operation") — stamped
+    Claude->>Gate: Edit app/operations/x.rb
+    Gate-->>Claude: ✓ allowed (matching stamp, still fresh)
+```
 
 ## What it looks like in practice
 
-On every prompt, Claude sees the routing table (generated from `rules`):
+On every prompt, Claude sees the routing table:
 
 ```
 [skill-first] STOP. Before editing files in this project, invoke the matching skill
@@ -68,8 +75,7 @@ Routing (what you're touching -> required skill):
 - */app/operations/* -> edit-or-create-action-operation
 ```
 
-If Claude edits a governed file anyway, the edit is rejected and the error tells it
-exactly how to recover:
+If Claude edits a governed file anyway, the edit is rejected with a recovery recipe:
 
 ```
   ✗  skill-first blocked this edit
@@ -99,27 +105,49 @@ gate lets it through.
 }
 ```
 
-- **`window`** (optional, default `300`) — seconds a stamped skill stays valid.
-- **`reminder`** (optional) — replaces the default preamble injected on every prompt;
-  the routing table is appended after it either way.
-- **`overrides`** (optional) — skills that may edit ANY governed path, e.g. an
-  orchestrator skill that composes several governed edits in one flow.
 - **`rules`** — ordered list of `{ "glob", "skill", "desc"? }`. **First matching glob
   wins**, so order specific → general. `desc` is an optional label shown in the
-  routing table.
-- Globs have shell-`case` semantics: `*` matches any run of characters **including
-  `/`**, `?` matches exactly one. Patterns match against the absolute file path.
-- Unknown keys (top-level or inside a rule) are rejected and the gate fails closed,
-  so a typo like `"ruls"` can't silently disable enforcement.
-- The routing table Claude sees is generated from `rules`, so the reminder and the
-  gate can never drift apart.
+  routing table (and, since JSON has no comments, the place to document intent).
+- **`window`** (optional, default `300`) — seconds a stamped skill stays valid.
+- **`overrides`** (optional) — skills that may edit ANY governed path, e.g. an
+  orchestrator skill that composes several governed edits in one flow.
+- **`reminder`** (optional) — replaces the default preamble injected on every prompt;
+  the generated routing table is appended after it either way.
+
+Globs have shell-`case` semantics: `*` matches any run of characters **including
+`/`**, `?` matches exactly one. Patterns match against the absolute file path.
+
+## Failure modes & guarantees
+
+For an enforcement tool, what happens when things go wrong *is* the design. The rule
+everywhere: **loud beats silent** — the gate never turns itself off quietly.
+
+| Situation | Behavior |
+| --- | --- |
+| No `.claude/skill-first/` in the project | Silent no-op: nothing injected, nothing blocked |
+| Edited file matches no rule | Allowed |
+| Matching skill stamped within the window | Allowed |
+| No skill invoked yet | Blocked; message names the required skill |
+| A *different* skill was invoked last | Blocked — the stamp holds only the LAST skill invoked |
+| Right skill, stamped too long ago | Blocked as expired |
+| Fresh stamp of an `overrides` skill | Allowed on any governed path |
+| `config.json` unparseable / unknown key (e.g. `"ruls"`) | **All** edits blocked with the exact error; every prompt injects a warning |
+| `jq` not found anywhere | Governed project: all edits blocked with install instructions; ungoverned: no-op |
+
+Two guarantees behind that table:
+
+- **State lives in the project**, never in the plugin cache (`$CLAUDE_PLUGIN_ROOT`
+  is a read-only cache that changes on every update).
+- **Only the last skill counts.** Invoking any other skill between the required one
+  and the edit revokes the authorization — enforcing the sequence "right skill →
+  edit", not "right skill at some point".
 
 ## Legacy format
 
 Projects set up before `config.json` used `gate-map.conf` (`<glob>|<skill>` lines,
-`@override|<skill>` for overrides) plus a hand-written `routing.md`. Both are still
-honored when `config.json` is absent; `config.json` supersedes them.
-`/skill-first:setup` can migrate.
+`@override|<skill>`) plus a hand-written `routing.md`. Both are still honored when
+`config.json` is absent; `config.json` supersedes them. `/skill-first:setup` can
+migrate.
 
 ## Distribute to a team
 
@@ -136,11 +164,49 @@ automatic:
 }
 ```
 
-## Notes
+## FAQ
 
-- State (`.skill-used`) always lives in the project dir, never in the plugin cache
-  (`$CLAUDE_PLUGIN_ROOT` is read-only and changes on every update).
-- The stamp holds only the LAST skill invoked — invoking any other skill between the
-  required skill and the edit revokes the authorization. That's intentional: it forces
-  the sequence "right skill → edit".
-- JSON has no comments; use each rule's `desc` field to document intent.
+**Every edit is suddenly blocked.** Read the block message — it names the cause:
+either `config.json` doesn't parse / has an unknown key (fix the file), or `jq`
+can't be found (install it). Both are deliberate fail-closed states.
+
+**I invoked the right skill and still got blocked.** Either another skill was
+invoked after it (only the last stamp counts — invoke the required one again), or
+the window expired (default 5 min; raise `window` if your flows are longer).
+
+**How do I bypass it in an emergency?** The gate only intercepts Claude Code's
+Edit/Write tools — your editor and git are untouched. To disable it for Claude too,
+rename/remove `.claude/skill-first/config.json` or disable the plugin.
+
+**Does it work on Windows?** The hooks are bash + jq, so: WSL/Git Bash yes, native
+cmd/PowerShell no.
+
+**Why such a short window?** A fresh stamp means "the conventions are in context
+*right now*". Long windows let authorization outlive the context that justified it.
+It's per-project tunable via `window`.
+
+## Development
+
+```
+skill-first/
+  hooks/
+    require-skill.sh    # the PreToolUse gate
+    stamp-skill.sh      # the PostToolUse(Skill) stamp
+    skill-reminder.sh   # the UserPromptSubmit reminder
+    lib/common.sh       # config loading/validation, jq lookup, shared helpers
+  skills/setup/         # the /skill-first:setup scaffolding skill
+test/hooks.test.sh      # end-to-end suite (60 scenarios)
+```
+
+Run the tests (no setup needed — they drive the hooks exactly like Claude Code does,
+piping hook JSON on stdin, under macOS system bash 3.2 to catch bashisms):
+
+```
+bash test/hooks.test.sh
+```
+
+Try the plugin against a local checkout without installing:
+
+```
+claude --plugin-dir ./skill-first
+```
