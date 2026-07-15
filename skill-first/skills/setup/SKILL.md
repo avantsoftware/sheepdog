@@ -1,12 +1,12 @@
 ---
-description: Scaffold the skill-first configuration in the current project. Use when the user wants to set up, enable, or bootstrap the skill-first gate for a repository — creates .claude/skill-first/gate-map.conf and routing.md and wires .gitignore. Not project-specific; it writes starter files the user then customizes.
+description: Scaffold the skill-first configuration in the current project. Use when the user wants to set up, enable, or bootstrap the skill-first gate for a repository — creates .claude/skill-first/config.json and wires .gitignore. Not project-specific; it writes a starter config the user then customizes.
 ---
 
 # Set up skill-first for this project
 
 The `skill-first` plugin is a generic engine: three hooks that read **project-owned**
-rules from `.claude/skill-first/`. The plugin ships no rules of its own. This skill
-scaffolds those rules for the current project.
+rules from `.claude/skill-first/config.json`. The plugin ships no rules of its own.
+This skill scaffolds that config for the current project.
 
 Do the following, in order. Adapt paths/skills to what the project actually has —
 do not blindly paste the examples.
@@ -19,45 +19,38 @@ do not blindly paste the examples.
   mistake). Ask the user if it isn't obvious. Common picks: source dirs with strong
   conventions, and test dirs.
 
-## 2. Create `.claude/skill-first/gate-map.conf`
+## 2. Create `.claude/skill-first/config.json`
 
-Maps a file glob to the skill required before editing it. **First matching glob
-wins**, so order specific → general. Lines starting with `#` and blank lines are
-ignored. Use `@override|<skill>` to let an orchestrator-style skill edit any governed
-file (repeatable).
+One JSON file holds the whole gate: the authorization window, override skills, and
+the ordered glob→skill rules. The routing table injected on every prompt is
+GENERATED from `rules`, so the reminder and the gate can never drift apart.
 
-Starter template (replace the examples with this project's real globs and skill
-names):
+Starter template (replace the example rule with this project's real globs and skill
+names; drop the fields the project doesn't need):
 
-```
-# <glob>|<skill>   — editing a file matching <glob> requires <skill> first.
-# @override|<skill> — <skill> may edit ANY governed file (e.g. an orchestrator).
-# First match wins; order specific -> general.
-
-# @override|my-orchestrator-skill
-
-# */path/to/governed/dir/*|the-skill-for-that-dir
-```
-
-## 3. Create `.claude/skill-first/routing.md`
-
-This markdown is injected into context on every prompt (via the UserPromptSubmit
-hook). Keep it a short, imperative reminder plus the glob→skill routing table, so the
-model reaches for the right skill before the gate has to block it. Starter template:
-
-```
-[skill-first] STOP. Before editing files in this project, invoke the matching skill
-below via the Skill tool FIRST, then edit. Edits to governed paths are hook-gated:
-the gate requires the EXACT matching skill for that file (not just any skill), valid
-for 5 min after you invoke it.
-
-Routing (what you're touching -> skill):
-- <describe a governed path> -> <the-skill-for-it>
+```json
+{
+  "window": 300,
+  "overrides": [],
+  "rules": [
+    { "glob": "*/path/to/governed/dir/*", "skill": "the-skill-for-that-dir", "desc": "optional label for the routing table" }
+  ]
+}
 ```
 
-Fill the routing table so it mirrors `gate-map.conf`.
+Field notes (JSON has no comments — explain choices to the user in chat instead):
 
-## 4. Ignore the runtime stamp
+- `window` — seconds a stamped skill stays valid (default 300; omit if default is fine).
+- `overrides` — skills allowed to edit ANY governed path (orchestrator-style skills);
+  omit if none.
+- `rules` — **first matching glob wins**, so order specific → general. Globs use
+  shell-case semantics: `*` matches any run of characters (including `/`), `?`
+  matches exactly one. They match against the absolute file path.
+- `reminder` (optional) — replaces the default preamble injected on every prompt.
+- Unknown keys are rejected and the gate fails closed — typos can't silently
+  disable enforcement.
+
+## 3. Ignore the runtime stamp
 
 The hooks write `.claude/skill-first/.skill-used` at runtime (the "last skill invoked"
 timestamp). It must not be committed. Add this line to the project's `.gitignore` if
@@ -67,12 +60,21 @@ missing:
 .claude/skill-first/.skill-used
 ```
 
-Commit `gate-map.conf` and `routing.md` (they are shared team rules); do not commit
-`.skill-used`.
+Commit `config.json` (it is shared team rules); do not commit `.skill-used`.
+
+## 4. Migrate a legacy setup (only if present)
+
+If the project already has `.claude/skill-first/gate-map.conf` (and `routing.md`),
+the hooks still honor them, but `config.json` supersedes both. Convert each
+`<glob>|<skill>` line into a `rules` entry and each `@override|<skill>` line into an
+`overrides` entry, then delete `gate-map.conf` and `routing.md`.
 
 ## 5. Activate
 
-Tell the user the plugin must be enabled for the hooks to run:
+Tell the user the plugin must be enabled for the hooks to run, and that the hooks
+need `jq` (preinstalled on macOS 15+; a standard package elsewhere). Warn that once
+this project is governed, a missing jq or a broken config blocks ALL edits — the
+gate fails closed rather than silently off:
 
 ```
 /plugin marketplace add <path-to-marketplace>
@@ -82,4 +84,4 @@ Tell the user the plugin must be enabled for the hooks to run:
 
 Then verify: invoking a skill stamps `.claude/skill-first/.skill-used`, and editing a
 governed file without the matching skill is blocked with a message pointing at
-`gate-map.conf`.
+`config.json`.

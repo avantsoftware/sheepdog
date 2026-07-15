@@ -8,7 +8,7 @@
     {
       "name": "skill-first",
       "source": "./skill-first",
-      "description": "Generic skill-first gate: injects a per-project task->skill routing table on every prompt and blocks edits to governed files unless the matching skill was invoked first. Project rules live in .claude/skill-first/, scaffolded with /skill-first:setup."
+      "description": "Generic skill-first gate: injects a per-project task->skill routing table on every prompt and blocks edits to governed files unless the matching skill was invoked first. Project rules live in .claude/skill-first/config.json, scaffolded with /skill-first:setup."
     }
   ]
 }

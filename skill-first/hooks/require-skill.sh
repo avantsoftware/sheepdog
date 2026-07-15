@@ -4,47 +4,78 @@
 # invoked. The Skill tool's PostToolUse hook (stamp-skill.sh) records "<ts> <skill>"
 # in the project's .claude/skill-first/.skill-used.
 #
-# All rules are PROJECT-OWNED, not shipped by the plugin. The path->skill map lives
-# at .claude/skill-first/gate-map.conf (scaffold it with /skill-first:setup).
-# No map -> the plugin is a no-op for this project (every edit allowed).
-#
-# gate-map.conf format (first matching glob wins; comments/blank lines ignored):
-#   <glob>|<skill>        a file matching <glob> requires <skill>
-#   @override|<skill>     <skill> may edit ANY governed file (e.g. an orchestrator
-#                         skill that composes several others); repeatable
+# Config comes from .claude/skill-first/config.json (see lib/common.sh for the
+# schema and the legacy gate-map.conf fallback). No config -> every edit allowed.
+# On a governed project the gate FAILS CLOSED when it cannot do its job — jq
+# missing, config unparseable, unknown/misspelled keys — because a gate that
+# silently turns itself off is worse than a loud one.
+case "${BASH_SOURCE[0]}" in */*) _dir="${BASH_SOURCE[0]%/*}" ;; *) _dir="." ;; esac
+. "$_dir/lib/common.sh"
 
-WINDOW=300 # seconds (5 min)
+# Project not opted in -> allow everything.
+[ -f "$SF_JSON" ] || [ -f "$SF_LEGACY" ] || exit 0
 
-MAP="$CLAUDE_PROJECT_DIR/.claude/skill-first/gate-map.conf"
-[ -f "$MAP" ] || exit 0
+if ! sf_ensure_jq; then
+  {
+    printf '\n  ✗  skill-first: `jq` was not found on PATH, so the gate cannot run.\n'
+    printf '     This project governs edits (.claude/skill-first/), so all Edit/Write calls are\n'
+    printf '     blocked until jq is available to Claude Code. Ask the user to install jq.\n'
+  } >&2
+  exit 2
+fi
 
 INPUT=$(cat)
 FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+[ -z "$FILE" ] && exit 0
+FILE=${FILE//\\//}
 
 required=""
 overrides=" "
-while IFS='|' read -r glob skill; do
-  case "$glob" in '' | \#*) continue ;; esac
-  if [ "$glob" = "@override" ]; then
-    overrides="$overrides$skill "
-    continue
+if [ -f "$SF_JSON" ]; then
+  SRC="config.json"
+  if ! errmsg=$(sf_check_config); then
+    {
+      printf '\n  ✗  skill-first: could not read .claude/skill-first/%s\n' "$SRC"
+      printf '     %s\n\n' "$errmsg"
+      printf '  All Edit/Write calls are blocked until the config parses. Fix that file (or remove it to disable the gate).\n'
+    } >&2
+    exit 2
   fi
-  # First matching glob wins; keep scanning so later @override lines are still read.
-  if [ -z "$required" ]; then
+  WINDOW=$(jq -r ".window // $WINDOW_DEFAULT" "$SF_JSON")
+  overrides=" $(jq -r '(.overrides // []) | join(" ")' "$SF_JSON") "
+  # First matching glob wins; rules keep file order.
+  while IFS='|' read -r glob skill; do
+    [ -z "$glob" ] && continue
     # shellcheck disable=SC2254
-    case "$FILE" in $glob) required="$skill" ;; esac
-  fi
-done <"$MAP"
+    case "$FILE" in $glob) required="$skill"; break ;; esac
+  done < <(jq -r '(.rules // [])[] | .glob + "|" + .skill' "$SF_JSON")
+else
+  # Legacy gate-map.conf: <glob>|<skill> lines, @override|<skill>, # comments.
+  SRC="gate-map.conf"
+  WINDOW=$WINDOW_DEFAULT
+  while IFS='|' read -r glob skill; do
+    case "$glob" in '' | \#*) continue ;; esac
+    if [ "$glob" = "@override" ]; then
+      overrides="$overrides$skill "
+      continue
+    fi
+    # First matching glob wins; keep scanning so later @override lines are still read.
+    if [ -z "$required" ]; then
+      # shellcheck disable=SC2254
+      case "$FILE" in $glob) required="$skill" ;; esac
+    fi
+  done <"$SF_LEGACY"
+fi
 
 # Not a governed path -> allow.
 [ -z "$required" ] && exit 0
 
-STAMP="$CLAUDE_PROJECT_DIR/.claude/skill-first/.skill-used"
 ts=""
 used=""
-[ -f "$STAMP" ] && read -r ts used <"$STAMP"
+[ -f "$SF_STAMP" ] && read -r ts used <"$SF_STAMP"
+case "$ts" in '' | *[!0-9]*) ts="" ;; esac
 now=$(date +%s)
-mins=$((WINDOW / 60))
+win=$(sf_fmt_window "$WINDOW")
 
 # Would the stamped skill satisfy this gate, ignoring freshness?
 satisfies=0
@@ -65,7 +96,7 @@ fi
 if [ -z "$used" ]; then
   why="No skill has been invoked yet, so no edit to this path is authorized."
 elif [ "$satisfies" -eq 1 ]; then
-  why="You invoked '$used' earlier, but that was over ${mins} min ago and the authorization has expired."
+  why="You invoked '$used' earlier, but that was over $win ago and the authorization has expired."
 else
   why="The last skill you invoked ('$used') does not authorize edits to this path."
 fi
@@ -77,6 +108,6 @@ fi
   printf '     Why        %s\n' "$why"
   printf '     Required   the "%s" skill\n\n' "$required"
   printf '  →  Do this now: invoke the Skill tool with skill "%s", then re-apply this exact edit.\n' "$required"
-  printf '     This path is governed by .claude/skill-first/gate-map.conf; the skill stays valid for %s min after you invoke it.\n' "$mins"
+  printf '     This path is governed by .claude/skill-first/%s; the skill stays valid for %s after you invoke it.\n' "$SRC" "$win"
 } >&2
 exit 2
