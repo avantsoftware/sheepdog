@@ -12,8 +12,7 @@
 </p>
 
 <p align="center">
-  sheepdog herds Claude Code through your project's conventions.<br>
-  A bark on every prompt. A gate when it strays.
+  sheepdog herds Claude Code through your project's conventions.
 </p>
 
 <p align="center">
