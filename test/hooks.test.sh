@@ -117,7 +117,7 @@ run "invalid: missing skill field"      2 "$(edit_json /x/anything.txt)" require
 printf '{"window": -5, "rules": []}\n' > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json"
 run "invalid: negative window"          2 "$(edit_json /x/a.txt)" require-skill.sh "window must be a positive integer" stderr
 printf '{"window": 300, "ruls": [{"glob": "*/a/*", "skill": "s"}]}\n' > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json"
-run "invalid: unknown top-level key"    2 "$(edit_json /x/a.txt)" require-skill.sh 'unknown key "ruls" (allowed: window, reminder, overrides, rules)' stderr
+run "invalid: unknown top-level key"    2 "$(edit_json /x/a.txt)" require-skill.sh 'unknown key "ruls" (allowed: window, reminder, overrides, rules, log)' stderr
 run "invalid: unknown key reminder warns" 0 "" skill-reminder.sh "[sheepdog] WARNING" stdout
 printf '{"rules": [{"glob": "*/a/*", "skill": "s", "des": "typo"}]}\n' > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json"
 run "invalid: unknown key inside rule"  2 "$(edit_json /x/a.txt)" require-skill.sh "rules[0] has an unknown key (allowed: glob, skill, desc)" stderr
@@ -186,6 +186,71 @@ else
   jrun "no-jq: stamp silent no-op"       0 "$(skill_json x)" stamp-skill.sh "" "$GOV"
   jrun "no-jq: ungoverned still allowed" 0 "$(edit_json /x/a.txt)" require-skill.sh "" "$UNGOV"
 fi
+
+### 9. Decision log (log.jsonl)
+export CLAUDE_PROJECT_DIR="$WORK/logproj"; mkdir -p "$CLAUDE_PROJECT_DIR/.claude/sheepdog"
+LOG="$CLAUDE_PROJECT_DIR/.claude/sheepdog/log.jsonl"
+cat > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json" <<'EOF'
+{
+  "overrides": ["orchestrator"],
+  "rules": [{ "glob": "*/app/gov/*", "skill": "gov-skill" }]
+}
+EOF
+log_last() { # <name> <pattern> — assert the LAST log line contains pattern
+  if tail -n 1 "$LOG" 2>/dev/null | grep -qF -- "$2"; then PASS=$((PASS+1)); echo "PASS  $1"
+  else FAIL=$((FAIL+1)); echo "FAIL  $1"; echo "--- last log line:"; tail -n 1 "$LOG" 2>/dev/null | sed 's/^/    /'; fi
+}
+log_lines() { wc -l < "$LOG" 2>/dev/null | tr -d ' '; }
+
+run "log: no-skill block still blocks"  2 '{"session_id":"sess-1","tool_input":{"file_path":"/x/app/gov/a.rb"}}' require-skill.sh "No skill has been invoked yet" stderr
+log_last "log: block/no-skill recorded" '"event":"block","reason":"no-skill"'
+log_last "log: required skill recorded" '"required":"gov-skill"'
+log_last "log: empty used -> null"      '"used":null'
+log_last "log: session id recorded"     '"session":"sess-1"'
+log_last "log: matched rule recorded"   '"rule":"*/app/gov/*"'
+if tail -n 1 "$LOG" | jq -e '(.ts | type) == "number"' >/dev/null 2>&1; then PASS=$((PASS+1)); echo "PASS  log: line is valid JSON with numeric ts"; else FAIL=$((FAIL+1)); echo "FAIL  log: line is valid JSON with numeric ts"; fi
+
+stamp_now other-skill
+run "log: wrong-skill block"            2 "$(edit_json /x/app/gov/a.rb)" require-skill.sh
+log_last "log: wrong-skill recorded"    '"reason":"wrong-skill"'
+log_last "log: stamped skill recorded"  '"used":"other-skill"'
+stamp_old gov-skill
+run "log: expired block"                2 "$(edit_json /x/app/gov/a.rb)" require-skill.sh
+log_last "log: expired recorded"        '"reason":"expired"'
+stamp_now gov-skill
+run "log: matching allow"               0 "$(edit_json /x/app/gov/a.rb)" require-skill.sh
+log_last "log: allow/match recorded"    '"event":"allow","reason":"match"'
+stamp_now orchestrator
+run "log: override allow"               0 "$(edit_json /x/app/gov/a.rb)" require-skill.sh
+log_last "log: allow/override recorded" '"reason":"override"'
+
+before=$(log_lines)
+run "log: ungoverned path allowed"      0 "$(edit_json /x/lib/free.rb)" require-skill.sh
+[ "$(log_lines)" = "$before" ] && { PASS=$((PASS+1)); echo "PASS  log: ungoverned path not logged"; } || { FAIL=$((FAIL+1)); echo "FAIL  log: ungoverned path not logged"; }
+
+printf '{"log": false, "rules": [{"glob": "*/app/gov/*", "skill": "gov-skill"}]}\n' > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json"
+rm -f "$CLAUDE_PROJECT_DIR/.claude/sheepdog/.skill-used"
+before=$(log_lines)
+run "log-off: gate still blocks"        2 "$(edit_json /x/app/gov/a.rb)" require-skill.sh "No skill has been invoked yet" stderr
+[ "$(log_lines)" = "$before" ] && { PASS=$((PASS+1)); echo "PASS  log-off: nothing written"; } || { FAIL=$((FAIL+1)); echo "FAIL  log-off: nothing written"; }
+
+printf '{"log": "yes", "rules": []}\n' > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json"
+run "invalid: log must be boolean"      2 "$(edit_json /x/a.txt)" require-skill.sh "log must be true or false" stderr
+
+# Rotation: a >1MB log is trimmed to its newest 2000 lines after the append.
+printf '{"rules": [{"glob": "*/app/gov/*", "skill": "gov-skill"}]}\n' > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json"
+awk 'BEGIN{s="";for(i=0;i<160;i++)s=s"x";for(i=0;i<8000;i++)print "{\"pad\":\""s"\"}"}' > "$LOG"
+stamp_now gov-skill
+run "log: edit allowed during rotation" 0 "$(edit_json /x/app/gov/a.rb)" require-skill.sh
+[ "$(log_lines)" = "2000" ] && { PASS=$((PASS+1)); echo "PASS  log: rotated to 2000 lines"; } || { FAIL=$((FAIL+1)); echo "FAIL  log: rotated to 2000 lines ($(log_lines) lines)"; }
+log_last "log: newest line survives rotation" '"event":"allow"'
+
+# Legacy projects log too (no toggle there; on by default).
+export CLAUDE_PROJECT_DIR="$WORK/legacylog"; mkdir -p "$CLAUDE_PROJECT_DIR/.claude/sheepdog"
+LOG="$CLAUDE_PROJECT_DIR/.claude/sheepdog/log.jsonl"
+printf '*/app/gov/*|gov-skill\n' > "$CLAUDE_PROJECT_DIR/.claude/sheepdog/gate-map.conf"
+run "log: legacy block"                 2 "$(edit_json /x/app/gov/a.rb)" require-skill.sh
+log_last "log: legacy block recorded"   '"event":"block","reason":"no-skill"'
 
 echo
 echo "== $PASS passed, $FAIL failed, $SKIP skipped =="

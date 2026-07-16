@@ -28,9 +28,12 @@ INPUT=$(cat)
 FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [ -z "$FILE" ] && exit 0
 FILE=${FILE//\\//}
+SESSION=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 
 required=""
+rule=""
 overrides=" "
+LOG_ENABLED=1
 if [ -f "$SD_JSON" ]; then
   SRC="config.json"
   if ! errmsg=$(sf_check_config); then
@@ -42,12 +45,13 @@ if [ -f "$SD_JSON" ]; then
     exit 2
   fi
   WINDOW=$(jq -r ".window // $WINDOW_DEFAULT" "$SD_JSON")
+  LOG_ENABLED=$(jq -r 'if .log == false then 0 else 1 end' "$SD_JSON")
   overrides=" $(jq -r '(.overrides // []) | join(" ")' "$SD_JSON") "
   # First matching glob wins; rules keep file order.
   while IFS='|' read -r glob skill; do
     [ -z "$glob" ] && continue
     # shellcheck disable=SC2254
-    case "$FILE" in $glob) required="$skill"; break ;; esac
+    case "$FILE" in $glob) required="$skill"; rule="$glob"; break ;; esac
   done < <(jq -r '(.rules // [])[] | .glob + "|" + .skill' "$SD_JSON")
 else
   # Legacy gate-map.conf: <glob>|<skill> lines, @override|<skill>, # comments.
@@ -62,13 +66,19 @@ else
     # First matching glob wins; keep scanning so later @override lines are still read.
     if [ -z "$required" ]; then
       # shellcheck disable=SC2254
-      case "$FILE" in $glob) required="$skill" ;; esac
+      case "$FILE" in $glob) required="$skill"; rule="$glob" ;; esac
     fi
   done <"$SD_LEGACY"
 fi
 
-# Not a governed path -> allow.
+# Not a governed path -> allow (and don't log: only governed decisions matter).
 [ -z "$required" ] && exit 0
+
+# Every decision on a governed path is journaled to log.jsonl (see common.sh).
+sd_log() { # $1 event (allow|block), $2 reason
+  [ "$LOG_ENABLED" = "1" ] || return 0
+  sf_log_decision "$1" "$2" "$FILE" "$rule" "$required" "$used" "$SESSION"
+}
 
 ts=""
 used=""
@@ -79,27 +89,33 @@ win=$(sf_fmt_window "$WINDOW")
 
 # Would the stamped skill satisfy this gate, ignoring freshness?
 satisfies=0
+via=""
 if [ -n "$used" ]; then
   if [ "$used" = "$required" ]; then
-    satisfies=1
+    satisfies=1 via="match"
   else
-    case "$overrides" in *" $used "*) satisfies=1 ;; esac
+    case "$overrides" in *" $used "*) satisfies=1 via="override" ;; esac
   fi
 fi
 
 # Fresh AND satisfying -> allow the edit.
 if [ "$satisfies" -eq 1 ] && [ -n "$ts" ] && [ "$((now - ts))" -lt "$WINDOW" ]; then
+  sd_log allow "$via"
   exit 0
 fi
 
 # Blocked: report the precise reason and the exact next action.
 if [ -z "$used" ]; then
+  reason="no-skill"
   why="No skill has been invoked yet, so no edit to this path is authorized."
 elif [ "$satisfies" -eq 1 ]; then
+  reason="expired"
   why="You invoked '$used' earlier, but that was over $win ago and the authorization has expired."
 else
+  reason="wrong-skill"
   why="The last skill you invoked ('$used') does not authorize edits to this path."
 fi
+sd_log block "$reason"
 
 {
   printf '\n'

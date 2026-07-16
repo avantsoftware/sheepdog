@@ -13,6 +13,7 @@ SD_DIR="$CLAUDE_PROJECT_DIR/.claude/sheepdog"
 SD_JSON="$SD_DIR/config.json"
 SD_LEGACY="$SD_DIR/gate-map.conf"
 SD_STAMP="$SD_DIR/.skill-used"
+SD_LOG="$SD_DIR/log.jsonl"
 
 # Claude Code may run hooks with a minimal PATH (GUI launch, bare shell); look
 # for jq in common install locations before giving up. Returns 1 if jq is
@@ -22,6 +23,30 @@ sf_ensure_jq() {
   PATH="$HOME/.nix-profile/bin:/etc/profiles/per-user/${USER:-$(id -un)}/bin:/run/current-system/sw/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
   export PATH
   command -v jq >/dev/null 2>&1
+}
+
+# Append one gate decision to log.jsonl and rotate when the file grows past
+# ~1MB (keeps the newest 2000 lines). Best-effort by design: a logging failure
+# must never change the gate's decision, so every path returns 0. Caller has
+# already verified jq is available.
+# $1 event (allow|block)  $2 reason (match|override|no-skill|wrong-skill|expired)
+# $3 file  $4 matched rule glob  $5 required skill  $6 stamped skill ("" if none)
+# $7 session id ("" if unknown)
+sf_log_decision() {
+  jq -cn --argjson ts "$(date +%s)" \
+    --arg event "$1" --arg reason "$2" --arg file "$3" --arg rule "$4" \
+    --arg required "$5" --arg used "$6" --arg session "$7" \
+    '{ts: $ts, event: $event, reason: $reason, file: $file, rule: $rule,
+      required: $required,
+      used: (if $used == "" then null else $used end),
+      session: (if $session == "" then null else $session end)}' \
+    >>"$SD_LOG" 2>/dev/null || return 0
+  local size
+  size=$(wc -c <"$SD_LOG" 2>/dev/null) || return 0
+  if [ "${size:-0}" -gt 1048576 ]; then
+    tail -n 2000 "$SD_LOG" >"$SD_LOG.tmp" 2>/dev/null && mv "$SD_LOG.tmp" "$SD_LOG"
+  fi
+  return 0
 }
 
 sf_fmt_window() { # $1: seconds -> "5 min" | "90 s"
@@ -37,11 +62,12 @@ sf_fmt_window() { # $1: seconds -> "5 min" | "90 s"
 sf_check_config() {
   local out
   out=$(jq -r '
-    if type != "object" then "top level must be a JSON object (window/reminder/overrides/rules)"
-    else (keys - ["window", "reminder", "overrides", "rules"]) as $extra
-    | if ($extra | length) > 0 then "unknown key \"\($extra[0])\" (allowed: window, reminder, overrides, rules)"
+    if type != "object" then "top level must be a JSON object (window/reminder/overrides/rules/log)"
+    else (keys - ["window", "reminder", "overrides", "rules", "log"]) as $extra
+    | if ($extra | length) > 0 then "unknown key \"\($extra[0])\" (allowed: window, reminder, overrides, rules, log)"
       elif .window != null and ((.window | type) != "number" or .window <= 0 or (.window | floor) != .window) then "window must be a positive integer (seconds)"
       elif .reminder != null and (.reminder | type) != "string" then "reminder must be a string"
+      elif .log != null and (.log | type) != "boolean" then "log must be true or false"
       elif .overrides != null and ((.overrides | type) != "array" or ([.overrides[]? | select((type != "string") or (. == ""))] | length) > 0) then "overrides must be a list of skill names"
       elif .rules != null and (.rules | type) != "array" then "rules must be a list"
       else

@@ -47,20 +47,24 @@ Field notes (JSON has no comments — explain choices to the user in chat instea
   shell-case semantics: `*` matches any run of characters (including `/`), `?`
   matches exactly one. They match against the absolute file path.
 - `reminder` (optional) — replaces the default preamble injected on every prompt.
+- `log` (optional, default `true`) — journal every gate decision on a governed path
+  to `.claude/sheepdog/log.jsonl` (summarize it with `/sheepdog:report`). Set
+  `false` to disable.
 - Unknown keys are rejected and the gate fails closed — typos can't silently
   disable enforcement.
 
-## 3. Ignore the runtime stamp
+## 3. Ignore the runtime state
 
-The hooks write `.claude/sheepdog/.skill-used` at runtime (the "last skill invoked"
-timestamp). It must not be committed. Add this line to the project's `.gitignore` if
-missing:
+The hooks write two runtime files under `.claude/sheepdog/`: `.skill-used` (the
+"last skill invoked" timestamp) and `log.jsonl` (the decision journal). Neither
+must be committed. Add these lines to the project's `.gitignore` if missing:
 
 ```
 .claude/sheepdog/.skill-used
+.claude/sheepdog/log.jsonl
 ```
 
-Commit `config.json` (it is shared team rules); do not commit `.skill-used`.
+Commit `config.json` (it is shared team rules); do not commit the runtime files.
 
 ## 4. Migrate a legacy config (only if present)
 
