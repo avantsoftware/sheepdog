@@ -19,7 +19,7 @@
   <img src="https://img.shields.io/badge/plugin-Claude%20Code-111111?style=flat-square" alt="Claude Code plugin">
   <img src="https://img.shields.io/badge/hooks-bash%20%2B%20jq-111111?style=flat-square" alt="bash + jq">
   <img src="https://img.shields.io/badge/install-nothing%20to%20build-111111?style=flat-square" alt="nothing to build">
-  <img src="https://img.shields.io/badge/e2e%20tests-60-111111?style=flat-square" alt="60 e2e tests">
+  <img src="https://img.shields.io/badge/e2e%20tests-86-111111?style=flat-square" alt="86 e2e tests">
   <img src="https://img.shields.io/badge/failure%20mode-closed-111111?style=flat-square" alt="fails closed">
   <img src="https://img.shields.io/badge/license-MIT-111111?style=flat-square" alt="MIT license">
 </p>
@@ -112,8 +112,8 @@ Then, inside the project you want to gate:
 ```
 
 It discovers the project's skills, scaffolds **`.claude/sheepdog/config.json`**
-(commit it — these are shared team rules) and adds a `.gitignore` entry for
-**`.claude/sheepdog/.skill-used`** (runtime state — never commit it).
+(commit it — these are shared team rules) and adds `.gitignore` entries for the
+runtime state (**`.skill-used`** and **`log.jsonl`** — never commit those).
 
 ## How it works
 
@@ -154,6 +154,20 @@ When an edit is rejected, the error is a recovery recipe, not a slap:
 
 Claude invokes the skill, re-applies the edit, and the gate lets it through.
 
+### The dog keeps a diary
+
+Every decision on a governed path — allowed or blocked, and why — is journaled as
+one JSON line in `.claude/sheepdog/log.jsonl` (auto-rotated at ~1MB):
+
+```json
+{"ts":1752680000,"event":"block","reason":"no-skill","file":"/repo/src/api/users.ts","rule":"*/src/api/*","required":"create-api-route","used":null,"session":"abc123"}
+```
+
+Run **`/sheepdog:report`** to turn it into insights: how many convention detours
+were blocked, which skill Claude tries to skip the most (a sign its description
+needs work), and whether legitimate flows keep expiring (a sign `window` is too
+short). Disable with `"log": false` if you don't want the journal.
+
 ## `config.json` reference
 
 ```json
@@ -180,6 +194,8 @@ Claude invokes the skill, re-applies the edit, and the gate lets it through.
   and a component in one flow.
 - **`reminder`** (optional) — replaces the default preamble injected on every prompt;
   the generated routing table is appended after it either way.
+- **`log`** (optional, default `true`) — journal every gate decision to
+  `.claude/sheepdog/log.jsonl`; summarize with `/sheepdog:report`.
 
 Globs have shell-`case` semantics: `*` matches any run of characters **including
 `/`**, `?` matches exactly one. Patterns match against the absolute file path.
@@ -255,9 +271,10 @@ sheepdog/
     require-skill.sh    # the PreToolUse gate
     stamp-skill.sh      # the PostToolUse(Skill) stamp
     skill-reminder.sh   # the UserPromptSubmit reminder
-    lib/common.sh       # config loading/validation, jq lookup, shared helpers
+    lib/common.sh       # config loading/validation, jq lookup, decision log, shared helpers
   skills/setup/         # the /sheepdog:setup scaffolding skill
-test/hooks.test.sh      # end-to-end suite (60 scenarios)
+  skills/report/        # the /sheepdog:report log-analysis skill
+test/hooks.test.sh      # end-to-end suite (86 scenarios)
 ```
 
 Run the tests (no setup — they drive the hooks exactly like Claude Code does, piping
