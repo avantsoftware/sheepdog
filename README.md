@@ -21,6 +21,7 @@
   <img src="https://img.shields.io/badge/install-nothing%20to%20build-111111?style=flat-square" alt="nothing to build">
   <img src="https://img.shields.io/badge/e2e%20tests-60-111111?style=flat-square" alt="60 e2e tests">
   <img src="https://img.shields.io/badge/failure%20mode-closed-111111?style=flat-square" alt="fails closed">
+  <img src="https://img.shields.io/badge/license-MIT-111111?style=flat-square" alt="MIT license">
 </p>
 
 <p align="center">
