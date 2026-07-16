@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# PreToolUse(Edit|Write|MultiEdit) gate enforcing the skill-first rule: a governed
+# PreToolUse(Edit|Write|MultiEdit) gate enforcing the sheepdog rule: a governed
 # file may only be edited after the SPECIFIC matching skill for that file was
 # invoked. The Skill tool's PostToolUse hook (stamp-skill.sh) records "<ts> <skill>"
-# in the project's .claude/skill-first/.skill-used.
+# in the project's .claude/sheepdog/.skill-used.
 #
-# Config comes from .claude/skill-first/config.json (see lib/common.sh for the
+# Config comes from .claude/sheepdog/config.json (see lib/common.sh for the
 # schema and the legacy gate-map.conf fallback). No config -> every edit allowed.
 # On a governed project the gate FAILS CLOSED when it cannot do its job — jq
 # missing, config unparseable, unknown/misspelled keys — because a gate that
@@ -13,12 +13,12 @@ case "${BASH_SOURCE[0]}" in */*) _dir="${BASH_SOURCE[0]%/*}" ;; *) _dir="." ;; e
 . "$_dir/lib/common.sh"
 
 # Project not opted in -> allow everything.
-[ -f "$SF_JSON" ] || [ -f "$SF_LEGACY" ] || exit 0
+[ -f "$SD_JSON" ] || [ -f "$SD_LEGACY" ] || exit 0
 
 if ! sf_ensure_jq; then
   {
-    printf '\n  ✗  skill-first: `jq` was not found on PATH, so the gate cannot run.\n'
-    printf '     This project governs edits (.claude/skill-first/), so all Edit/Write calls are\n'
+    printf '\n  ✗  sheepdog: `jq` was not found on PATH, so the gate cannot run.\n'
+    printf '     This project governs edits (.claude/sheepdog/), so all Edit/Write calls are\n'
     printf '     blocked until jq is available to Claude Code. Ask the user to install jq.\n'
   } >&2
   exit 2
@@ -31,24 +31,24 @@ FILE=${FILE//\\//}
 
 required=""
 overrides=" "
-if [ -f "$SF_JSON" ]; then
+if [ -f "$SD_JSON" ]; then
   SRC="config.json"
   if ! errmsg=$(sf_check_config); then
     {
-      printf '\n  ✗  skill-first: could not read .claude/skill-first/%s\n' "$SRC"
+      printf '\n  ✗  sheepdog: could not read .claude/sheepdog/%s\n' "$SRC"
       printf '     %s\n\n' "$errmsg"
       printf '  All Edit/Write calls are blocked until the config parses. Fix that file (or remove it to disable the gate).\n'
     } >&2
     exit 2
   fi
-  WINDOW=$(jq -r ".window // $WINDOW_DEFAULT" "$SF_JSON")
-  overrides=" $(jq -r '(.overrides // []) | join(" ")' "$SF_JSON") "
+  WINDOW=$(jq -r ".window // $WINDOW_DEFAULT" "$SD_JSON")
+  overrides=" $(jq -r '(.overrides // []) | join(" ")' "$SD_JSON") "
   # First matching glob wins; rules keep file order.
   while IFS='|' read -r glob skill; do
     [ -z "$glob" ] && continue
     # shellcheck disable=SC2254
     case "$FILE" in $glob) required="$skill"; break ;; esac
-  done < <(jq -r '(.rules // [])[] | .glob + "|" + .skill' "$SF_JSON")
+  done < <(jq -r '(.rules // [])[] | .glob + "|" + .skill' "$SD_JSON")
 else
   # Legacy gate-map.conf: <glob>|<skill> lines, @override|<skill>, # comments.
   SRC="gate-map.conf"
@@ -64,7 +64,7 @@ else
       # shellcheck disable=SC2254
       case "$FILE" in $glob) required="$skill" ;; esac
     fi
-  done <"$SF_LEGACY"
+  done <"$SD_LEGACY"
 fi
 
 # Not a governed path -> allow.
@@ -72,7 +72,7 @@ fi
 
 ts=""
 used=""
-[ -f "$SF_STAMP" ] && read -r ts used <"$SF_STAMP"
+[ -f "$SD_STAMP" ] && read -r ts used <"$SD_STAMP"
 case "$ts" in '' | *[!0-9]*) ts="" ;; esac
 now=$(date +%s)
 win=$(sf_fmt_window "$WINDOW")
@@ -103,11 +103,11 @@ fi
 
 {
   printf '\n'
-  printf '  ✗  skill-first blocked this edit\n\n'
+  printf '  ✗  sheepdog blocked this edit\n\n'
   printf '     File       %s\n' "$FILE"
   printf '     Why        %s\n' "$why"
   printf '     Required   the "%s" skill\n\n' "$required"
   printf '  →  Do this now: invoke the Skill tool with skill "%s", then re-apply this exact edit.\n' "$required"
-  printf '     This path is governed by .claude/skill-first/%s; the skill stays valid for %s after you invoke it.\n' "$SRC" "$win"
+  printf '     This path is governed by .claude/sheepdog/%s; the skill stays valid for %s after you invoke it.\n' "$SRC" "$win"
 } >&2
 exit 2

@@ -1,0 +1,7 @@
+{
+  "name": "sheepdog",
+  "description": "Herds Claude Code through your project's conventions: injects a per-project task->skill routing table on every prompt and blocks edits to governed files unless the matching skill was invoked first. Project rules live in .claude/sheepdog/config.json (scaffold it with /sheepdog:setup); the plugin ships no project-specific rules. Hooks are plain bash + jq; on governed projects the gate fails closed when jq is missing or the config is broken.",
+  "author": {
+    "name": "Albert Alef"
+  }
+}

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Shared helpers for the skill-first hooks. Sourced by the hook scripts, never
+# Shared helpers for the sheepdog hooks. Sourced by the hook scripts, never
 # executed directly.
 #
 # All rules are PROJECT-OWNED, not shipped by the plugin. They live in
-# $CLAUDE_PROJECT_DIR/.claude/skill-first/config.json (scaffold it with
-# /skill-first:setup), with a fallback to the legacy gate-map.conf format.
+# $CLAUDE_PROJECT_DIR/.claude/sheepdog/config.json (scaffold it with
+# /sheepdog:setup), with a fallback to the legacy gate-map.conf format.
 # No config -> the plugin is a no-op for this project.
 
 WINDOW_DEFAULT=300 # seconds (5 min)
 
-SF_DIR="$CLAUDE_PROJECT_DIR/.claude/skill-first"
-SF_JSON="$SF_DIR/config.json"
-SF_LEGACY="$SF_DIR/gate-map.conf"
-SF_STAMP="$SF_DIR/.skill-used"
+SD_DIR="$CLAUDE_PROJECT_DIR/.claude/sheepdog"
+SD_JSON="$SD_DIR/config.json"
+SD_LEGACY="$SD_DIR/gate-map.conf"
+SD_STAMP="$SD_DIR/.skill-used"
 
 # Claude Code may run hooks with a minimal PATH (GUI launch, bare shell); look
 # for jq in common install locations before giving up. Returns 1 if jq is
@@ -56,7 +56,7 @@ sf_check_config() {
               end),
           "OK")
       end
-    end' "$SF_JSON" 2>&1)
+    end' "$SD_JSON" 2>&1)
   [ "$out" = "OK" ] && return 0
   printf '%s\n' "$out"
   return 1

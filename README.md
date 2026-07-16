@@ -1,21 +1,91 @@
-# skill-first
+<h1 align="center">sheepdog</h1>
 
-> Require the *right* skill to be invoked before Claude Code edits governed files —
-> a reminder on every prompt, and a hard gate when the reminder isn't enough.
+<p align="center">
+  <em>No matching skill, no edit.</em>
+</p>
 
-Skills are how a team teaches Claude its conventions: how an endpoint is created,
-what an operation looks like, how a serializer is structured. But skills are
-advisory — nothing stops the model from editing `app/operations/` by hand, and deep
-into a long session it will. Guidance in context decays; an agent in a hurry takes
-the direct path; the hand-edit that skips your workflow gets merged.
+<p align="center">
+  sheepdog herds Claude Code through your project's conventions.<br>
+  A bark on every prompt. A gate when it strays.
+</p>
 
-**skill-first turns "use the skill" from a suggestion into a precondition.** Editing
-a governed file without first invoking its matching skill is rejected at the tool
-level, with an error that tells Claude exactly how to recover.
+<p align="center">
+  <img src="https://img.shields.io/badge/plugin-Claude%20Code-111111?style=flat-square" alt="Claude Code plugin">
+  <img src="https://img.shields.io/badge/hooks-bash%20%2B%20jq-111111?style=flat-square" alt="bash + jq">
+  <img src="https://img.shields.io/badge/install-nothing%20to%20build-111111?style=flat-square" alt="nothing to build">
+  <img src="https://img.shields.io/badge/e2e%20tests-60-111111?style=flat-square" alt="60 e2e tests">
+  <img src="https://img.shields.io/badge/failure%20mode-closed-111111?style=flat-square" alt="fails closed">
+</p>
+
+<p align="center">
+  <a href="#before--after">See it</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#configjson-reference">Config</a> ·
+  <a href="#failure-modes--guarantees">Failure modes</a> ·
+  <a href="#faq">FAQ</a>
+</p>
+
+---
+
+You wrote skills so Claude would follow your project's standards to the letter: how
+a component is structured, what an API route returns, how a migration is written.
+Claude read them. And forty minutes into a session, it writes the component by hand
+anyway — its own way, politely, confidently, wrong.
+
+Ask it afterwards why it skipped the skill and you get the same answer every time:
+*"I thought I didn't need it."* It did need it. That is the flaw in advisory
+guidance: **the model decides when your conventions apply, and it decides wrong
+exactly when it matters.**
+
+sheepdog takes that decision away from the model. Like the border collie it's named
+after, it doesn't cage the agent — it herds it. Inside the directories you declare
+governed, every edit must go through the skill that documents exactly how that task
+is done in this project — invoked fresh, minutes ago, not remembered from last
+Tuesday. A reminder on every prompt keeps the agent in the flock; a hard gate turns
+it back the moment it strays.
 
 The plugin is **project-agnostic** and ships zero rules of its own. Each project
-declares what is governed and by which skill in `.claude/skill-first/config.json`.
-On a project that hasn't opted in, the plugin is a silent no-op.
+declares what is governed, and by which skill, in `.claude/sheepdog/config.json`.
+On a project that hasn't opted in, it is a silent no-op.
+
+## Before / After
+
+<table>
+<tr>
+<th width="50%">Without sheepdog</th>
+<th width="50%">With sheepdog</th>
+</tr>
+<tr>
+<td valign="top">
+
+```
+⏺ Write(src/components/DatePicker.tsx)
+  ⎿ Wrote 214 lines
+```
+
+Its own props API, its own CSS, none of your
+design system — merged before anyone notices.
+
+</td>
+<td valign="top">
+
+```
+⏺ Write(src/components/DatePicker.tsx)
+  ⎿ ✗ blocked — invoke the skill
+    "create-component" first
+
+⏺ Skill(create-component)
+
+⏺ Write(src/components/DatePicker.tsx)
+  ⎿ Wrote 32 lines
+```
+
+Same request. The convention survived.
+
+</td>
+</tr>
+</table>
 
 ## Quickstart
 
@@ -23,94 +93,84 @@ Prerequisite: `jq` (preinstalled on macOS 15+; `brew install jq` / `apt install 
 elsewhere).
 
 ```
-/plugin marketplace add avantsoftware/skill-first
-/plugin install skill-first@avantsoft
+/plugin marketplace add avantsoftware/sheepdog
+/plugin install sheepdog@avantsoft
 /reload-plugins
 ```
 
 Then, inside the project you want to gate:
 
 ```
-/skill-first:setup
+/sheepdog:setup
 ```
 
-It discovers the project's skills, scaffolds **`.claude/skill-first/config.json`**
+It discovers the project's skills, scaffolds **`.claude/sheepdog/config.json`**
 (commit it — these are shared team rules) and adds a `.gitignore` entry for
-**`.claude/skill-first/.skill-used`** (runtime state — never commit it).
+**`.claude/sheepdog/.skill-used`** (runtime state — never commit it).
 
 ## How it works
 
 Three bash hooks, all reading project-owned config from
-`$CLAUDE_PROJECT_DIR/.claude/skill-first/`:
+`$CLAUDE_PROJECT_DIR/.claude/sheepdog/`:
 
 | Hook | Event | Role |
 | --- | --- | --- |
-| `skill-reminder.sh` | `UserPromptSubmit` | **Nudge** — injects a reminder + the path→skill routing table (generated from `rules`) on every prompt. |
+| `skill-reminder.sh` | `UserPromptSubmit` | **Bark** — injects a reminder + the path→skill routing table (generated from `rules`) on every prompt. |
 | `stamp-skill.sh` | `PostToolUse(Skill)` | **Witness** — records `<timestamp> <skill>` in `.skill-used` whenever a skill is invoked. |
 | `require-skill.sh` | `PreToolUse(Edit\|Write\|MultiEdit)` | **Gate** — matches the edited file against `rules`; blocks unless the matching skill was stamped within the window. |
 
 ```mermaid
 sequenceDiagram
     participant Claude
-    participant Gate as skill-first
-    Note over Claude,Gate: on every user prompt
-    Gate-->>Claude: inject routing table (UserPromptSubmit)
-    Claude->>Gate: Edit app/operations/x.rb
-    Gate-->>Claude: ✗ blocked — invoke "edit-or-create-action-operation" first
-    Claude->>Gate: Skill("edit-or-create-action-operation") — stamped
-    Claude->>Gate: Edit app/operations/x.rb
-    Gate-->>Claude: ✓ allowed (matching stamp, still fresh)
+    participant Dog as sheepdog
+    Note over Claude,Dog: on every user prompt
+    Dog-->>Claude: inject routing table (UserPromptSubmit)
+    Claude->>Dog: Edit src/components/DatePicker.tsx
+    Dog-->>Claude: ✗ blocked — invoke "create-component" first
+    Claude->>Dog: Skill("create-component") — stamped
+    Claude->>Dog: Edit src/components/DatePicker.tsx
+    Dog-->>Claude: ✓ allowed (matching stamp, still fresh)
 ```
 
-## What it looks like in practice
-
-On every prompt, Claude sees the routing table:
+When an edit is rejected, the error is a recovery recipe, not a slap:
 
 ```
-[skill-first] STOP. Before editing files in this project, invoke the matching skill
-below via the Skill tool FIRST, then edit. [...]
+  ✗  sheepdog blocked this edit
 
-Routing (what you're touching -> required skill):
-- */app/operations/base/* (base operations) -> edit-or-create-base-operation
-- */app/operations/* -> edit-or-create-action-operation
-```
-
-If Claude edits a governed file anyway, the edit is rejected with a recovery recipe:
-
-```
-  ✗  skill-first blocked this edit
-
-     File       /repo/app/operations/create_user.rb
+     File       /repo/src/components/DatePicker.tsx
      Why        No skill has been invoked yet, so no edit to this path is authorized.
-     Required   the "edit-or-create-action-operation" skill
+     Required   the "create-component" skill
 
-  →  Do this now: invoke the Skill tool with skill "edit-or-create-action-operation", then re-apply this exact edit.
-     This path is governed by .claude/skill-first/config.json; the skill stays valid for 5 min after you invoke it.
+  →  Do this now: invoke the Skill tool with skill "create-component", then re-apply this exact edit.
+     This path is governed by .claude/sheepdog/config.json; the skill stays valid for 5 min after you invoke it.
 ```
 
-Claude invokes the skill (which stamps `.skill-used`), re-applies the edit, and the
-gate lets it through.
+Claude invokes the skill, re-applies the edit, and the gate lets it through.
 
 ## `config.json` reference
 
 ```json
 {
   "window": 600,
-  "overrides": ["edit-or-create-endpoint"],
+  "overrides": ["scaffold-feature"],
   "rules": [
-    { "glob": "*/app/operations/base/*", "skill": "edit-or-create-base-operation", "desc": "base operations" },
-    { "glob": "*/app/operations/*", "skill": "edit-or-create-action-operation" },
-    { "glob": "*/app/serializers/*", "skill": "edit-or-create-serializer" }
+    { "glob": "*/src/components/ui/*", "skill": "create-ui-primitive", "desc": "design-system primitives" },
+    { "glob": "*/src/components/*", "skill": "create-component", "desc": "UI components" },
+    { "glob": "*/src/api/*", "skill": "create-api-route", "desc": "API routes" },
+    { "glob": "*/db/migrations/*", "skill": "create-migration", "desc": "database migrations" }
   ]
 }
 ```
 
 - **`rules`** — ordered list of `{ "glob", "skill", "desc"? }`. **First matching glob
-  wins**, so order specific → general. `desc` is an optional label shown in the
-  routing table (and, since JSON has no comments, the place to document intent).
+  wins**, so order specific → general (above, a file in `components/ui/` hits the
+  primitives rule, never the generic component one). `desc` is an optional label
+  shown in the routing table (and, since JSON has no comments, the place to document
+  intent).
 - **`window`** (optional, default `300`) — seconds a stamped skill stays valid.
-- **`overrides`** (optional) — skills that may edit ANY governed path, e.g. an
-  orchestrator skill that composes several governed edits in one flow.
+- **`overrides`** (optional) — skills that may edit ANY governed path, e.g. a
+  `scaffold-feature` orchestrator that legitimately composes a migration, a route
+  and a component in one flow.
 - **`reminder`** (optional) — replaces the default preamble injected on every prompt;
   the generated routing table is appended after it either way.
 
@@ -119,12 +179,14 @@ Globs have shell-`case` semantics: `*` matches any run of characters **including
 
 ## Failure modes & guarantees
 
-For an enforcement tool, what happens when things go wrong *is* the design. The rule
-everywhere: **loud beats silent** — the gate never turns itself off quietly.
+> [!IMPORTANT]
+> The gate never turns itself off quietly. Broken config, misspelled key, missing
+> `jq` — on a governed project these **block all edits** with instructions, instead
+> of silently disabling enforcement.
 
 | Situation | Behavior |
 | --- | --- |
-| No `.claude/skill-first/` in the project | Silent no-op: nothing injected, nothing blocked |
+| No `.claude/sheepdog/` in the project | Silent no-op: nothing injected, nothing blocked |
 | Edited file matches no rule | Allowed |
 | Matching skill stamped within the window | Allowed |
 | No skill invoked yet | Blocked; message names the required skill |
@@ -142,25 +204,18 @@ Two guarantees behind that table:
   and the edit revokes the authorization — enforcing the sequence "right skill →
   edit", not "right skill at some point".
 
-## Legacy format
-
-Projects set up before `config.json` used `gate-map.conf` (`<glob>|<skill>` lines,
-`@override|<skill>`) plus a hand-written `routing.md`. Both are still honored when
-`config.json` is absent; `config.json` supersedes them. `/skill-first:setup` can
-migrate.
-
 ## Distribute to a team
 
-Commit `.claude/skill-first/config.json` in the target repo, then have teammates run
+Commit `.claude/sheepdog/config.json` in the target repo, then have teammates run
 the install commands — or wire it into the repo's `.claude/settings.json` so it's
 automatic:
 
 ```json
 {
   "extraKnownMarketplaces": {
-    "avantsoft": { "source": { "source": "github", "repo": "avantsoftware/skill-first" } }
+    "avantsoft": { "source": { "source": "github", "repo": "avantsoftware/sheepdog" } }
   },
-  "enabledPlugins": { "skill-first@avantsoft": true }
+  "enabledPlugins": { "sheepdog@avantsoft": true }
 }
 ```
 
@@ -176,7 +231,7 @@ the window expired (default 5 min; raise `window` if your flows are longer).
 
 **How do I bypass it in an emergency?** The gate only intercepts Claude Code's
 Edit/Write tools — your editor and git are untouched. To disable it for Claude too,
-rename/remove `.claude/skill-first/config.json` or disable the plugin.
+rename/remove `.claude/sheepdog/config.json` or disable the plugin.
 
 **Does it work on Windows?** The hooks are bash + jq, so: WSL/Git Bash yes, native
 cmd/PowerShell no.
@@ -188,18 +243,18 @@ It's per-project tunable via `window`.
 ## Development
 
 ```
-skill-first/
+sheepdog/
   hooks/
     require-skill.sh    # the PreToolUse gate
     stamp-skill.sh      # the PostToolUse(Skill) stamp
     skill-reminder.sh   # the UserPromptSubmit reminder
     lib/common.sh       # config loading/validation, jq lookup, shared helpers
-  skills/setup/         # the /skill-first:setup scaffolding skill
+  skills/setup/         # the /sheepdog:setup scaffolding skill
 test/hooks.test.sh      # end-to-end suite (60 scenarios)
 ```
 
-Run the tests (no setup needed — they drive the hooks exactly like Claude Code does,
-piping hook JSON on stdin, under macOS system bash 3.2 to catch bashisms):
+Run the tests (no setup — they drive the hooks exactly like Claude Code does, piping
+hook JSON on stdin, under macOS system bash 3.2 to catch bashisms):
 
 ```
 bash test/hooks.test.sh
@@ -208,5 +263,5 @@ bash test/hooks.test.sh
 Try the plugin against a local checkout without installing:
 
 ```
-claude --plugin-dir ./skill-first
+claude --plugin-dir ./sheepdog
 ```
