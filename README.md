@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" width="220" alt="sheepdog, the border collie that herds your coding agent">
+  </picture>
+</p>
+
 <h1 align="center">sheepdog</h1>
 
 <p align="center">
